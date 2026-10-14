@@ -13,7 +13,8 @@ from Ice import identityToString as id2str
 
 from gst_player import GstPlayer
 
-Ice.loadSlice(f'-I{Ice.getSliceDir()} spotifice_v0.ice')
+#Importante cambiar el slice con el que vayamos a trabajar
+Ice.loadSlice(f'-I{Ice.getSliceDir()} spotifice_v1.ice')
 import Spotifice  # type: ignore # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
