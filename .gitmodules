@@ -1,0 +1,3 @@
+[submodule "spotifice-gui"]
+	path = spotifice-gui
+	url = https://github.com/UCLM-ESI/spotifice-gui.git
