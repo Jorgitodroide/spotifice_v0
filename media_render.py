@@ -25,7 +25,13 @@ class MediaRenderI(Spotifice.MediaRender):
     def __init__(self, player):
         self.player = player
         self.provider = None
+        #Nos dicen que al arrancar, estará en STOPPED y sin pista cargada
+        #Necesitamos meter una variable booleana para saber si la repetición está activada o no
+        #Y una lista para el control de canciones
+        self.state = Spotifice.PlaybackState.STOPPED
         self.current_track = None
+        self.is_repeating = False
+        self.history = []
 
     def ensure_player_stopped(self):
         if self.player.is_playing():
@@ -61,6 +67,14 @@ class MediaRenderI(Spotifice.MediaRender):
     def load_track(self, track_id, current=None):
         self.ensure_provider_bound()
 
+        #Cada pista cargada con load_track() se añade al histórico, aunque ya aparezca en él. La única
+        #excepción es volver a cargar la pista actual, en ese caso el histórico no cambia.
+        #Es decir, tenemos que asegurarnos de que no metemos la pista en el historial si es la misma que ya está sonando
+        #Si la lista está vacía o el ultimo elemento de la lista es diferente a la canción que queremos meter.
+        if not self.history or self.history[-1] != track_id:
+            #Si no son iguales, la metemos
+            self.history.append(track_id)
+        
         try:
             with self.keep_playing_state(current):
                 self.current_track = self.provider.get_track_info(track_id)
@@ -129,7 +143,39 @@ class MediaRenderI(Spotifice.MediaRender):
 
         logger.info("Stopped")
 
+#---------------------------------------------
+    def get_status(self, current=None):
+        #Solo tenemos que devolver un objeto PlaybackStatus, ya que así está definido en la interfaz de ice
+        return Spotifice.PlaybackStatus(self.state, self.current_track, self.is_repeating)
 
+    def pause(self, current = None):
+        #STOPPED
+        if self.state == Spotifice.PlaybackState.STOPPED:
+            raise Spotifice.PlayerError(reason = "Cannot pause when stopped")
+        
+        #PLAYING
+        if self.state == Spotifice.PlaybackState.PLAYING:
+            self.state = Spotifice.PlaybackState.PAUSED
+            #No solo cambiamos el estado interno, si no que también avisamos al reproductor
+            self.player.pause()
+        
+        #PAUSED
+        if self.state == Spotifice.PlaybackState.PAUSED:
+            #No haríamos nada, porque es idempotente
+            self.state = Spotifice.PlaybackState.PAUSED
+            
+    def previous(self, current=None):
+        #Comprobamos que podemos volver atrás
+        if len(self.history) > 1:
+            #Si podemos volver atrás, quitamos la canción que esté la última
+            self.history.pop()
+            #Y ahora, llamamos a load_track para que la cargue
+            self.load_track(self.history[-1])
+        else:
+            pass   
+        
+            
+#---------------------------------------------
 def shutdown_on_interrupt(ic):
     def shutdown(*_):
         ic.shutdown()
