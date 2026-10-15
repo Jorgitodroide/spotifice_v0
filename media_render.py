@@ -109,6 +109,11 @@ class MediaRenderI(Spotifice.MediaRender):
         if not self.current_track:
             raise Spotifice.TrackError(reason="No track loaded")
 
+        if self.state == Spotifice.PlaybackState.PAUSED:
+            self.player.resume()
+            self.state = Spotifice.PlaybackState.PLAYING
+            return
+        
         self.ensure_player_stopped()
 
         try:
@@ -120,6 +125,8 @@ class MediaRenderI(Spotifice.MediaRender):
         self.player.play(self.chunk_reader(current.id))
         if not self.player.confirm_play_starts():
             raise Spotifice.PlayerError(reason="Failed to confirm playback")
+        
+        self.state = Spotifice.PlaybackState.PLAYING
 
     def chunk_reader(self, render_id):
         provider = self.provider
@@ -141,6 +148,8 @@ class MediaRenderI(Spotifice.MediaRender):
         if not self.player.stop():
             raise Spotifice.PlayerError(reason="Failed to confirm stop")
 
+        #Importante actualizar el estado de la variable cuando lo paremos, igual en play y pause
+        self.state = Spotifice.PlaybackState.STOPPED
         logger.info("Stopped")
 
 #---------------------------------------------
@@ -167,13 +176,24 @@ class MediaRenderI(Spotifice.MediaRender):
     def previous(self, current=None):
         #Comprobamos que podemos volver atrás
         if len(self.history) > 1:
-            #Si podemos volver atrás, quitamos la canción que esté la última
-            self.history.pop()
-            #Y ahora, llamamos a load_track para que la cargue
-            self.load_track(self.history[-1])
+            #Antes de borrar, vamos a hacer un "backup" de la canción
+            backup_track = self.history.pop()
+            try:
+                self.load_track(self.history[-1])
+            except Spotifice.Error:   
+                #En el caso de error, metemos la canción de respaldo de nuevo
+                self.history.append(backup_track)
+                #Y lanzamos el error
+                raise
         else:
-            pass   
-        
+            pass
+            
+    #Importante fijarse en el .ice para darnos cuenta de que necesitamos pasarle enabled    
+    def set_repeat(self, enabled, current=None):    
+        if enabled == True:
+            self.is_repeating = True
+        elif enabled == False:
+            self.is_repeating = False
             
 #---------------------------------------------
 def shutdown_on_interrupt(ic):
