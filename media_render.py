@@ -13,7 +13,7 @@ from Ice import identityToString as id2str
 
 from gst_player import GstPlayer
 
-Ice.loadSlice(f'-I{Ice.getSliceDir()} spotifice_v0.ice')
+Ice.loadSlice(f'-I{Ice.getSliceDir()} spotifice_v2.ice')
 import Spotifice  # type: ignore # noqa: E402
 
 logging.basicConfig(level=logging.INFO)

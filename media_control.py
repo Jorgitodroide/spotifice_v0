@@ -5,7 +5,7 @@ from time import sleep
 
 import Ice
 
-Ice.loadSlice(f'-I{Ice.getSliceDir()} spotifice_v0.ice')
+Ice.loadSlice(f'-I{Ice.getSliceDir()} spotifice_v2.ice')
 import Spotifice  # type: ignore # noqa: E402
 
 
