@@ -52,6 +52,8 @@ class MediaRenderI(Spotifice.MediaRender):
 
         self.provider = media_provider
         logger.info(f"Bound to MediaProvider '{id2str(media_provider.ice_getIdentity())}'")
+        #En caso de que todo vaya bien, eliminamos el historial
+        self.history.clear()
 
     def unbind_media_provider(self, current=None):
         try:
@@ -61,6 +63,8 @@ class MediaRenderI(Spotifice.MediaRender):
 
         self.provider = None
         logger.info("Unbound MediaProvider")
+        #Aquí, lo mismo, eliminamos el historial cuando acabamos 
+        self.history.clear()
 
     # --- ContentManager ---
 
@@ -71,13 +75,13 @@ class MediaRenderI(Spotifice.MediaRender):
         #excepción es volver a cargar la pista actual, en ese caso el histórico no cambia.
         #Es decir, tenemos que asegurarnos de que no metemos la pista en el historial si es la misma que ya está sonando
         #Si la lista está vacía o el ultimo elemento de la lista es diferente a la canción que queremos meter.
-        if not self.history or self.history[-1] != track_id:
-            #Si no son iguales, la metemos
-            self.history.append(track_id)
         
         try:
             with self.keep_playing_state(current):
                 self.current_track = self.provider.get_track_info(track_id)
+            if not self.history or self.history[-1] != track_id:
+                #Si no son iguales, la metemos
+                self.history.append(track_id)
 
             logger.info(f"Current track set to: {self.current_track.title}")
 
@@ -92,14 +96,24 @@ class MediaRenderI(Spotifice.MediaRender):
 
     @contextmanager
     def keep_playing_state(self, current):
+        #Antes de detener tenemos que guardar el estado, para recuperarlo más adelante
+        previous_state = self.state
+        
+        #Comprobamos que esté o playing o paused
         playing = self.player.is_playing()
         if playing:
+            #Y si lo está, lo paramos
             self.stop(current)
         try:
             yield
         finally:
-            if playing:
+            #Recuperamos el estado anterior, y actuamos en consecuencia
+            if previous_state == Spotifice.PlaybackState.STOPPED:
+                pass
+            if previous_state == Spotifice.PlaybackState.PLAYING:
                 self.play(current)
+            if previous_state == Spotifice.PlaybackState.PAUSED:
+                self.state = Spotifice.PlaybackState.PAUSED  
 
     def play(self, current=None):
         assert current, "remote invocation required"
@@ -110,9 +124,13 @@ class MediaRenderI(Spotifice.MediaRender):
             raise Spotifice.TrackError(reason="No track loaded")
 
         if self.state == Spotifice.PlaybackState.PAUSED:
-            self.player.resume()
-            self.state = Spotifice.PlaybackState.PLAYING
-            return
+            if self.player.is_playing():
+                check = self.player.resume()
+                if check:
+                    self.state = Spotifice.PlaybackState.PLAYING
+                else:
+                    raise Spotifice.PlayerError(reason = "Cannot resume")
+                return
         
         self.ensure_player_stopped()
 
@@ -122,7 +140,11 @@ class MediaRenderI(Spotifice.MediaRender):
             logger.error(f"Error starting stream: {e.reason}")
             raise Spotifice.StreamError(reason="Strean setup failed")
 
-        self.player.play(self.chunk_reader(current.id))
+        #Creamos una función auxiliar, para pasarle la info de la llamada remota(current) el cual contiene la canción que tiene que reptir
+        def al_terminar():
+            self.on_track_exhausted(current)
+
+        self.player.play(self.chunk_reader(current.id), al_terminar)
         if not self.player.confirm_play_starts():
             raise Spotifice.PlayerError(reason="Failed to confirm playback")
         
@@ -152,6 +174,13 @@ class MediaRenderI(Spotifice.MediaRender):
         self.state = Spotifice.PlaybackState.STOPPED
         logger.info("Stopped")
 
+    def on_track_exhausted(self, current=None):
+        if self.is_repeating:
+            #Ahora si lo tenemos porque en el play, hemos guardado en alterminar la info de la llamada remota
+            self.play(current)
+        else: 
+            self.state = Spotifice.PlaybackState.STOPPED
+            
 #---------------------------------------------
     def get_status(self, current=None):
         #Solo tenemos que devolver un objeto PlaybackStatus, ya que así está definido en la interfaz de ice
@@ -164,9 +193,11 @@ class MediaRenderI(Spotifice.MediaRender):
         
         #PLAYING
         if self.state == Spotifice.PlaybackState.PLAYING:
-            self.state = Spotifice.PlaybackState.PAUSED
-            #No solo cambiamos el estado interno, si no que también avisamos al reproductor
-            self.player.pause()
+            pause_check = self.player.pause()
+            if pause_check:
+                self.state = Spotifice.PlaybackState.PAUSED
+            else:
+                raise Spotifice.PlayerError(reason = "Cannot pause")
         
         #PAUSED
         if self.state == Spotifice.PlaybackState.PAUSED:
@@ -179,7 +210,7 @@ class MediaRenderI(Spotifice.MediaRender):
             #Antes de borrar, vamos a hacer un "backup" de la canción
             backup_track = self.history.pop()
             try:
-                self.load_track(self.history[-1])
+                self.load_track(self.history[-1], current=current)
             except Spotifice.Error:   
                 #En el caso de error, metemos la canción de respaldo de nuevo
                 self.history.append(backup_track)
