@@ -127,7 +127,7 @@ class MediaProviderI(Spotifice.MediaProvider):
         if playlist_id in self.playlists:
             return self.playlists[playlist_id]
         else:
-            raise Spotifice.PlaylistError(playlist_id, "Playlist error")
+            raise Spotifice.PlaylistError(playlist_id, "Playlist not found")
 
     def get_track(self, track_id):
         try:
