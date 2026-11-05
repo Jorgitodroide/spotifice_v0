@@ -25,6 +25,10 @@ class MediaRenderI(Spotifice.MediaRender):
         self.player = player
         self.provider = None
         self.current_track = None
+        #Añadimos 2 nuevos atributos para el manejo de las playlists
+        self.current_playlist = None
+        self.playlist_index = None
+        self.repeat_enabled = False
 
     def ensure_player_stopped(self):
         if self.player.is_playing():
@@ -44,6 +48,11 @@ class MediaRenderI(Spotifice.MediaRender):
             raise Spotifice.BadReference(reason=f"MediaProvider not reachable: {e}")
 
         self.provider = media_provider
+        
+        #Una vez que ha salido todo bien, descartamos la playlist activa
+        self.current_playlist = None
+        self.playlist_index = None
+            
         logger.info(f"Bound to MediaProvider '{id2str(media_provider.ice_getIdentity())}'")
 
     def unbind_media_provider(self, current=None):
@@ -53,6 +62,9 @@ class MediaRenderI(Spotifice.MediaRender):
             logger.error(f"Unbinding despite stop failure: {e.reason}")
 
         self.provider = None
+        #Una vez que ha salido todo bien, descartamos la playlist activa
+        self.current_playlist = None
+        self.playlist_index = None
         logger.info("Unbound MediaProvider")
 
     # --- ContentManager ---
@@ -64,12 +76,27 @@ class MediaRenderI(Spotifice.MediaRender):
             with self.keep_playing_state(current):
                 self.current_track = self.provider.get_track_info(track_id)
 
+            #Una vez que ha salido todo bien, descartamos la playlist activa
+            self.current_playlist = None
+            self.playlist_index = None
+                    
             logger.info(f"Current track set to: {self.current_track.title}")
 
         except Spotifice.TrackError as e:
             logger.error(f"Error setting track: {e.reason}")
             raise
-
+    
+    def load_playlist(self, playlist_id, current=None):
+        self.ensure_provider_bound()
+        playlist = self.provider.get_playlist(playlist_id)
+        
+        if not playlist.track_ids:
+            raise Spotifice.PlaylistError (item=playlist_id, reason="Playlist is empty")
+        
+        self.load_track(playlist.track_ids[0], current)
+        self.current_playlist = playlist
+        self.playlist_index = 0
+    
     def get_current_track(self, current=None):
         return self.current_track
 
@@ -86,6 +113,52 @@ class MediaRenderI(Spotifice.MediaRender):
             if playing:
                 self.play(current)
 
+    def set_repeat(self, enabled, current=None):
+        if enabled == True:
+            self.repeat_enabled = True
+        else:
+            self.repeat_enabled = False
+    
+    def next (self, current = None):
+        if self.current_playlist is None:
+            return
+        
+        playlist = self.current_playlist
+        siguiente = self.playlist_index + 1
+            
+        if len(playlist.track_ids) <= siguiente:
+            if self.repeat_enabled == True:
+                siguiente = 0
+            else:
+                return
+                
+        self.load_track(playlist.track_ids[siguiente], current)
+        self.current_playlist = playlist    
+        self.playlist_index = siguiente
+        
+    def previous(self, current = None):
+        if self.current_playlist is None:
+            return
+                
+        playlist = self.current_playlist
+        anterior = self.playlist_index - 1
+        if anterior < 0:
+            return
+        else:
+            self.load_track(playlist.track_ids[anterior], current)
+            self.current_playlist = playlist    
+            self.playlist_index = anterior
+    
+    def on_track_exhausted(self, current):
+        if self.current_playlist is None:
+            return
+        ultima_posicion = len(self.current_playlist.track_ids)-1
+        if self.playlist_index == ultima_posicion:
+            if self.repeat_enabled == False:
+                return
+        self.next(current)
+        self.play(current)
+             
     def play(self, current=None):
         assert current, "remote invocation required"
 
@@ -102,7 +175,7 @@ class MediaRenderI(Spotifice.MediaRender):
             logger.error(f"Error starting stream: {e.reason}")
             raise Spotifice.StreamError(reason="Strean setup failed")
 
-        self.player.play(self.chunk_reader(current.id))
+        self.player.play(self.chunk_reader(current.id), lambda: self.on_track_exhausted(current))
         if not self.player.confirm_play_starts():
             raise Spotifice.PlayerError(reason="Failed to confirm playback")
 

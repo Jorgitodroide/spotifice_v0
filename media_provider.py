@@ -8,6 +8,11 @@ import uuid
 from collections import namedtuple
 from pathlib import Path
 from time import sleep
+#Importamos datetime para la conversión de la fecha
+from datetime import datetime
+
+#Importamos JSON
+import json
 
 import Ice
 from Ice import identityToString as id2str
@@ -47,11 +52,82 @@ class StreamedFile:
 
 
 class MediaProviderI(Spotifice.MediaProvider):
-    def __init__(self, media_dir):
+    def __init__(self, media_dir, playlist_dir):
         self.media_dir = Path(media_dir)
+        self.playlist_dir = Path(playlist_dir)
         self.tracks = {}  # track_id -> LocalTrack
+        
+        #Creamos el diccionario de las playlists
+        self.playlists = {}
+        
         self.active_streams = {}  # media_render_id -> StreamedFile
         self.load_media()
+        
+        #Después de cargar las canciones, llamamos a la carga de las playlists
+        self.load_playlists()
+
+    def load_playlists(self):
+        carpeta = self.playlist_dir
+
+        for ruta in carpeta.glob("*.playlist"):
+            pistas_validas = []
+
+            try:
+                #Abrimos, leemos el JSON y lo convertimos a un diccionario de python
+                with open(ruta, encoding="utf-8") as archivo:
+                    datos = json.load(archivo)
+            except (OSError, json.JSONDecodeError) as error:
+                #En el caso de encontrar un archivo defectuoso, lo ignoramos
+                print(f"Se ignora {ruta.name}: {error}")
+                continue
+
+            try:
+                #Ahora, convertimos la fecha a un formato válido
+                fecha = datetime.strptime(datos["created_at"], "%d-%m-%Y")
+                print(fecha)
+                #timestamp nos da un float, y según el slice, necesitamos un int
+                created_at = int(fecha.timestamp())
+
+                #Unos print para asegurarnos de que todo está correcto
+                print(f"Nombre: {datos['name']}")
+                print(f"Número de pistas del archivo {len(datos['track_ids'])}")
+
+                for id in datos["track_ids"]:
+                    #Solo vamos a guardar los ids que estén en el "catálogo" de pistas
+                    if id in self.tracks:
+                        pistas_validas.append(id)
+
+                print(f"Número de pistas válidas: {len(pistas_validas)}")
+                print(f"Id's de pistas válidas: {pistas_validas}")
+
+                #Creamos el objeto Playlist, definido en el slice
+                playlist = Spotifice.Playlist(
+                    datos["id"],
+                    datos["name"],
+                    datos["description"],
+                    datos["owner"],
+                    created_at,
+                    pistas_validas
+                )
+            except (KeyError, ValueError) as error:
+                print(f"Se ignora {ruta.name}: {error}")
+                continue
+
+            #Y lo guardamos en el diccionario que creamos antes
+            self.playlists[datos["id"]] = playlist
+            print(self.playlists[datos["id"]].name)
+
+        #Finalmente, mostramos las playlists que hemos cargado
+        print(f"Playlists cargadas: {list(self.playlists)}")
+
+    def get_all_playlists(self, current = None):
+        return(list(self.playlists.values()))
+    
+    def get_playlist(self, playlist_id, current = None):
+        if playlist_id in self.playlists:
+            return self.playlists[playlist_id]
+        else:
+            raise Spotifice.PlaylistError(playlist_id, "Playlist error")
 
     def get_track(self, track_id):
         try:
@@ -143,7 +219,13 @@ def main(ic):
         'Spotifice.MediaProvider.Identity',  str(uuid.uuid1()))
     media_dir = properties.getPropertyWithDefault(
         'Spotifice.MediaProvider.Content', 'media')
-    servant = MediaProviderI(Path(media_dir))
+    #Ahora, creamos el directorio que va a contener las playlist
+    playlist_dir = properties.getPropertyWithDefault(
+        'Spotifice.MediaProvider.Playlists', 'playlists')
+    
+    #Y le pasamos ambos
+    servant = MediaProviderI(Path(media_dir), Path(playlist_dir))
+    
 
     adapter = ic.createObjectAdapter("Spotifice.MediaProviderAdapter")
     proxy = adapter.add(servant, ic.stringToIdentity(identity))
